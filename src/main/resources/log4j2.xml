@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Properties>
+        <Property name="LOG_PATTERN">%d [%t] %-5level %logger{36} - %msg%n</Property>
+        <Property name="LOG_DIR">logs</Property>
+    </Properties>
+
+    <Appenders>
+        <!-- Console appender -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+        </Console>
+
+        <!-- Routing appender -->
+        <Routing name="RoutingAppender">
+            <Routes pattern="$${ctx:threadName}">
+                <Route>
+                    <RollingFile name="Rolling-${ctx:threadName}"
+                                 fileName="${LOG_DIR}/${ctx:threadName}.log"
+                                 filePattern="${LOG_DIR}/${ctx:threadName}-%d{MM-dd-yyyy}-%i.log.gz">
+                        <PatternLayout pattern="${LOG_PATTERN}"/>
+                        <Policies>
+                            <SizeBasedTriggeringPolicy size="10 MB"/>
+                        </Policies>
+                        <DefaultRolloverStrategy max="10"/>
+                    </RollingFile>
+                </Route>
+                <!-- Fallback route for threads without threadName context -->
+                <Route key="$${ctx:threadName}" ref="Console"/>
+            </Routes>
+        </Routing>
+
+        <!-- Default file appender for threads without specific context -->
+        <RollingFile name="DefaultFile"
+                     fileName="${LOG_DIR}/default.log"
+                     filePattern="${LOG_DIR}/default-%d{MM-dd-yyyy}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="10 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="10"/>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="RoutingAppender"/>
+            <AppenderRef ref="DefaultFile"/>
+        </Root>
+    </Loggers>
+</Configuration>
