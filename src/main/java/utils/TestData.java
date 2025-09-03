@@ -16,6 +16,7 @@ public class TestData {
     private String teamName;
     private String testDataFile;
     private String testDataSheet;
+    private String credentialsSheet;
 
     private int implicitWait;
     private int explicitWait;
@@ -24,8 +25,9 @@ public class TestData {
     private String reportConfigPath;
     private String screenshotPath;
 
-    private String applicationUsername;
-    private String applicationPassword;
+    private String appRole;
+    private String appUsername;
+    private String appPassword;
 
     private String journalProcessID;
     private String journal_batch_name;

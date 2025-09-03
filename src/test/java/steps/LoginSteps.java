@@ -3,42 +3,41 @@ package steps;
 import context.TestContext;
 import context.TestContextManager;
 import io.cucumber.java.en.*;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.openqa.selenium.WebDriver;
-import utils.TestData;
+import pages.LoginPage;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static utils.ReportUtils.logStep;
 
 public class LoginSteps {
 
+
+    private static final Logger logger = LogManager.getLogger(LoginSteps.class);
+
     private final WebDriver driver;
-    private final TestData testData;
+    private final TestContext context;
+
 
     public LoginSteps() {
-        TestContext context = TestContextManager.getContext();
+        this.context = TestContextManager.getContext();
         this.driver = context.getDriver();
-        this.testData = context.getTestData();
     }
 
     @Given("the application is running")
     public void the_application_is_running() {
-        logStep("Scenario: " + testData.getScenarioName());
+        logStep("Scenario: " + context.getTestData().getScenarioName());
         logStep("Application is running");
-        driver.get(testData.getAppUrl());
+        driver.get(context.getTestData().getAppUrl());
+        LoginPage loginPage = context.getPageManager().getPage(LoginPage.class);
+        assertTrue(loginPage.isPageLoaded(), "Login page did not load properly!");
     }
 
     @Given("the user navigates to the login page")
     public void user_navigates_to_login_page() {
         logStep("Navigating to login page");
-    }
-
-    @When("the user enters username {string} and password {string}")
-    public void user_enters_credentials(String username, String password) {
-        logStep("Entering username: " + username + " and password: " + password);
-    }
-
-    @When("clicks the login button")
-    public void clicks_login_button() {
-        logStep("Clicking login button");
+//        context.getPageManager().loginAsRole(context.getTestData().getAppRole());
     }
 
     @Then("the user should see the dashboard")
@@ -49,5 +48,7 @@ public class LoginSteps {
     @Then("the user should see an error message {string}")
     public void user_should_see_error_message(String message) {
         logStep("Verifying error message: " + message);
+        logger.info("Expected error message: {}", message);
     }
+
 }

@@ -33,7 +33,8 @@ public class Hooks {
 
     @Before
     public void beforeScenario(Scenario scenario) {
-        String safeName = scenario.getName().replaceAll("[^a-zA-Z0-9-_.]", "_");
+        String scenarioName = scenario.getName();
+        String safeName = scenarioName.replaceAll("[^a-zA-Z0-9-_.]", "_");
         ThreadContext.put("threadName", safeName);
 
         TestContext context = TestContextManager.getContext();
@@ -41,27 +42,17 @@ public class Hooks {
 
         // Set scenario info
         context.setScenario(scenario);
-        testData.setScenarioName(scenario.getName());
+        testData.setScenarioName(scenarioName);
+
+        initExcelForScenario(testData, scenario);
+
+        testData.getExcel().loadScenarioData(scenarioName);
+
         context.clearPageCache(); // fresh pages per scenario
         ReportUtils.createScenarioTest(scenario.getName());
 
         logger.info("Starting scenario: {}", testData.getScenarioName());
-        try {
-            // Open Excel workbook for this scenario/thread
-            XSSFWorkbook workbook = ExcelUtils.openWorkbook(testData.getTestDataFile());
-            XSSFSheet sheet = ExcelUtils.getSheet(workbook, testData.getTestDataSheet());
 
-            // Store in TestData thread-local
-            testData.setWorkBook(workbook);
-            testData.setWorkSheet(sheet);
-
-            // Initialize ExcelSteps thread-local
-            testData.getExcel(); // ensures ExcelSteps is ready
-
-        } catch (Exception e) {
-            logger.error("Error initializing Excel workbook for scenario: {}", scenario.getName(), e);
-            throw new RuntimeException(e);
-        }
     }
 
 
@@ -70,15 +61,7 @@ public class Hooks {
         TestContext context = TestContextManager.getContext();
         TestData testData = context.getTestData();
         // Save Excel workbook for this scenario
-        try (XSSFWorkbook workbook = testData.getWorkBook()) {
-
-            if (workbook != null) {
-                testData.getExcel().save(); // save workbook via ExcelSteps
-                testData.clearThreadExcel(); // clear thread-local to prevent leaks
-            }
-        } catch (Exception e) {
-            logger.error("Error saving Excel workbook for scenario: {}", scenario.getName(), e);
-        }
+        saveAndCloseExcel(testData, scenario);
         // Quit driver and clean up
         context.quitDriver();
         TestContextManager.removeContext();
@@ -96,6 +79,46 @@ public class Hooks {
             attachScreenshot(scenario, context.getDriver());
         } catch (Exception e) {
             logger.warn("Screenshot capture failed: {}", e.getMessage());
+        }
+    }
+
+    private void initExcelForScenario(TestData testData, Scenario scenario) {
+        try {
+
+            // Open Excel workbook for this scenario/thread
+            XSSFWorkbook workbook = ExcelUtils.openWorkbook(testData.getTestDataFile());
+            XSSFSheet sheet = ExcelUtils.getSheet(workbook, testData.getTestDataSheet());
+
+            // Store in TestData thread-local
+            testData.setWorkBook(workbook);
+            testData.setWorkSheet(sheet);
+
+            // Initialize ExcelSteps for thread-local access
+            testData.getExcel();
+
+            logger.info("Excel initialized for scenario: {}", scenario.getName());
+        } catch (Exception e) {
+            logger.error("Error initializing Excel for scenario: {}", scenario.getName(), e);
+            throw new RuntimeException(e);
+        }
+    }
+
+
+    private void saveAndCloseExcel(TestData testData, Scenario scenario) {
+        XSSFWorkbook workbook = testData.getWorkBook();
+        if (workbook != null) {
+            try (workbook) {
+                try {
+                    // Save workbook via ExcelSteps
+                    testData.getExcel().save();
+                } catch (Exception e) {
+                    logger.error("Error saving Excel for scenario: {}", scenario.getName(), e);
+                }
+            } catch (Exception e) {
+                logger.warn("Failed to close Excel workbook for scenario: {}", scenario.getName());
+            } finally {
+                testData.clearThreadExcel(); // Prevent memory leaks
+            }
         }
     }
 

@@ -11,7 +11,6 @@ import org.openqa.selenium.edge.EdgeDriver;
 import org.openqa.selenium.edge.EdgeOptions;
 import org.openqa.selenium.firefox.FirefoxDriver;
 import org.openqa.selenium.firefox.FirefoxOptions;
-import utils.Constants;
 import utils.TestData;
 
 import java.io.File;
@@ -41,10 +40,10 @@ public class DriverFactory {
     }
 
     private void initialSetup() {
-        String testDataFile = String.format(Constants.TESTDATA_PATH,
-                config.getString("test_data_file_path", "testData.xlsx"));
+        String testDataFile = config.getString("testDataFile", "testData.xlsx");
         testData.setTestDataFile(System.getProperty("user.dir") + File.separator + testDataFile);
-        testData.setTestDataSheet(config.getString("sheet_name", "Sheet1"));
+        testData.setTestDataSheet(config.getString("testDataSheetName", "Sheet1"));
+        testData.setCredentialsSheet(config.getString("credentialsSheetName", "Credentials"));
         testData.setAppUrl(config.getString("application_url", "http://localhost"));
         testData.setBrowserName(config.getString("browser", "edge").toLowerCase());
         testData.setHeadless(config.getBoolean("headless", false));

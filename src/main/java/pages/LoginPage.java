@@ -13,9 +13,12 @@ public class LoginPage extends CommonMethods {
 
     private static final Logger logger = LogManager.getLogger(LoginPage.class);
 
-    private static final By usernameTxtBox = By.cssSelector("input#userid");
-    private static final By passwordTxtBox = By.cssSelector("input#password");
-    private static final By loginBtn = By.xpath("//button[contains(text(),'Sign In')]");
+    private static final By usernameTxtBox = By.xpath("//input[@id='user-name']");
+    private static final By passwordTxtBox = By.xpath("//input[@id='password']");
+    private static final By loginBtn = By.xpath("//input[@id='login-button']");
+    private static final By images = By.xpath("//*[@id='tabletsImg']/div");
+
+
 
     public LoginPage(WebDriver driver, TestData testData) {
         super(driver, testData);
@@ -34,11 +37,16 @@ public class LoginPage extends CommonMethods {
         clickElement(loginBtn);
     }
 
-
     public void login(String username, String password) {
         logger.info("Logging in with username: {}", username);
         enterUserId(username);
         enterPassword(password);
         clickLoginButton();
+    }
+
+    public boolean isPageLoaded() {
+        waitForPageToLoad("Login Page");  // Wait for DOM ready
+        waitForVisibilityOfElement(images);      // Wait for a key element
+        return true;
     }
 }

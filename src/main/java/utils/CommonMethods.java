@@ -49,16 +49,12 @@ public class CommonMethods {
         wait.until(ExpectedConditions.elementToBeClickable(locator));
     }
 
-    public void inputText(By locator, String text) {
-        inputText(locator, text, false);
-    }
-
     @FunctionalInterface
     private interface ElementAction {
         void perform(WebElement element);
     }
 
-    enum ActionType { CLICK, INPUT }
+    private enum ActionType { CLICK, INPUT }
 
     // Custom exception for clarity
     public static class ElementActionFailedException extends RuntimeException {
@@ -134,6 +130,10 @@ public class CommonMethods {
         };
     }
 
+    public void inputText(By locator, String text) {
+        inputText(locator, text, false);
+    }
+
     public void inputText(By locator, String text, boolean pressTab) {
         retryAction(locator, element -> {
             element.clear();
@@ -149,7 +149,6 @@ public class CommonMethods {
             logger.info("Clicked element located by {}", locator);
         }, ActionType.CLICK);
     }
-
 
     public void scrollThroughPageToTriggerLazyLoading() {
         try {
@@ -219,4 +218,44 @@ public class CommonMethods {
                 .executeScript("return window.innerHeight");
         return viewportHeightValue != null ? viewportHeightValue.longValue() : 0;
     }
+    public void waitForPageToLoad(String pageName) {
+        try {
+            logger.debug("Waiting for page to load: {}", pageName);
+
+            // Wait for DOM ready state
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getPageLoadTimeout()));
+            wait.until(d -> "complete".equals(((JavascriptExecutor) d).executeScript("return document.readyState")));
+
+            // Optional: Wait for jQuery AJAX to finish
+            waitForJQueryInactive();
+
+            logger.info("Page loaded successfully: {}", pageName);
+
+        } catch (TimeoutException e) {
+            String errorMsg = String.format("Page '%s' failed to load within %d seconds",
+                    pageName, testData.getPageLoadTimeout());
+            logger.error(errorMsg, e);
+            throw new RuntimeException(errorMsg, e);
+
+        } catch (Exception e) {
+            String errorMsg = String.format("Page '%s' did not load properly", pageName);
+            logger.error(errorMsg, e);
+            throw new RuntimeException(errorMsg, e);
+        }
+    }
+
+    private void waitForJQueryInactive() {
+        try {
+            WebDriverWait shortWait = new WebDriverWait(driver, Duration.ofSeconds(5));
+            shortWait.until(d -> {
+                Long jQueryActive = (Long) ((JavascriptExecutor) d)
+                        .executeScript("return window.jQuery ? jQuery.active : 0");
+                return jQueryActive != null && jQueryActive == 0;
+            });
+        } catch (Exception e) {
+            // jQuery doesn't present or not active - this is acceptable
+            logger.debug("jQuery not present or wait not needed: {}", e.getMessage());
+        }
+    }
+
 }
