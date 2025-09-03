@@ -2,6 +2,7 @@ package utils;
 
 import org.apache.poi.xssf.usermodel.XSSFSheet;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import java.lang.reflect.Method;
 
 public class ExcelSteps {
 
@@ -97,6 +98,47 @@ public class ExcelSteps {
         ExcelUtils.saveWorkbook(getWorkbook(), testData.getTestDataFile());
     }
 
+
+    public void loadScenarioData(String scenarioName) {
+        XSSFSheet sheet = getSheet(); // GL Reports sheet
+        int rowNum = ExcelUtils.getRow(sheet, scenarioName);
+        if (rowNum == -1) {
+            throw new RuntimeException("Scenario not found in GL Reports sheet: " + scenarioName);
+        }
+
+        // Get all methods of TestData
+        Method[] methods = TestData.class.getMethods();
+
+        for (int col = 0; col < sheet.getRow(0).getLastCellNum(); col++) {
+            String columnName = sheet.getRow(0).getCell(col).getStringCellValue().trim();
+            String cellValue = readCell(rowNum, columnName);
+
+            // Build setter name dynamically: column_name -> setColumn_name
+            String setterName = "set" + convertToCamelCase(columnName);
+
+            // Find the setter method
+            for (Method method : methods) {
+                if (method.getName().equalsIgnoreCase(setterName) && method.getParameterCount() == 1) {
+                    try {
+                        method.invoke(testData, cellValue);
+                    } catch (Exception e) {
+                        throw new RuntimeException("Failed to set field '" + columnName + "' in TestData", e);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    /**
+     * Converts "journal_batch_name" → "Journal_batch_name"
+     */
+    private String convertToCamelCase(String input) {
+        if (input == null || input.isEmpty()) return input;
+        return input.substring(0, 1).toUpperCase() + input.substring(1);
+    }
+
+/*
     public void loadScenarioData(String scenarioName) {
         XSSFSheet sheet = getSheet(); // GL Reports sheet is already loaded
         int rowNum = ExcelUtils.getRow(sheet, scenarioName);
@@ -120,5 +162,6 @@ public class ExcelSteps {
         testData.setJournal_line2_credit(readCell(rowNum, "journal_line2_credit"));
         testData.setJournal_line2_desc(readCell(rowNum, "journal_line2_desc"));
     }
+*/
 
 }
