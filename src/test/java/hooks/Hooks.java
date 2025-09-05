@@ -23,7 +23,7 @@ public class Hooks {
 
     @BeforeAll
     public static void beforeAll() {
-        ReportUtils.initExtentReports();
+        ReportUtils.initExtentReports(TestContextManager.getContext().getTestData());
     }
 
     @AfterAll
@@ -49,7 +49,7 @@ public class Hooks {
         testData.getExcel().loadScenarioData(scenarioName);
 
         context.clearPageCache(); // fresh pages per scenario
-        ReportUtils.createScenarioTest(scenario.getName());
+        ReportUtils.createScenarioTest(testData);
 
         logger.info("Starting scenario: {}", testData.getScenarioName());
 

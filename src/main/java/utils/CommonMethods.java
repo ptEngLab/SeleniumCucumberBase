@@ -5,11 +5,15 @@ import lombok.RequiredArgsConstructor;
 import org.openqa.selenium.*;
 import org.openqa.selenium.support.ui.ExpectedCondition;
 import org.openqa.selenium.support.ui.ExpectedConditions;
+import org.openqa.selenium.support.ui.Select;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
+import java.util.List;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static utils.Constants.*;
 
@@ -23,11 +27,6 @@ public class CommonMethods {
     protected final WebDriver driver;
     protected final TestData testData;
 
-
-    // Convenience method to get any page by class
-    public <T> T getPage(Class<T> pageClass) {
-        return TestContextManager.getContext().getPageManager().getPage(pageClass);
-    }
 
     public void logPageAction(String actionDescription) {
         ReportUtils.logStepWithScreenshot(actionDescription, driver);
@@ -54,7 +53,7 @@ public class CommonMethods {
         void perform(WebElement element);
     }
 
-    private enum ActionType { CLICK, INPUT }
+    private enum ActionType { CLICK, INPUT, JS_CLICK, READ}
 
     // Custom exception for clarity
     public static class ElementActionFailedException extends RuntimeException {
@@ -126,7 +125,22 @@ public class CommonMethods {
                     return "visibility and enabled state of element located by: " + locator;
                 }
             };
+            case JS_CLICK -> new ExpectedCondition<>() {
+                @Override
+                public WebElement apply(WebDriver driver) {
+                    WebElement element = ExpectedConditions.presenceOfElementLocated(locator).apply(driver);
+                    if (element != null && element.isDisplayed()) {
+                        return element;
+                    }
+                    return null;
+                }
 
+                @Override
+                public String toString() {
+                    return "presence and visible state of element located by: " + locator;
+                }
+            };
+            case READ -> ExpectedConditions.presenceOfElementLocated(locator);
         };
     }
 
@@ -218,6 +232,7 @@ public class CommonMethods {
                 .executeScript("return window.innerHeight");
         return viewportHeightValue != null ? viewportHeightValue.longValue() : 0;
     }
+
     public void waitForPageToLoad(String pageName) {
         try {
             logger.debug("Waiting for page to load: {}", pageName);
@@ -258,4 +273,242 @@ public class CommonMethods {
         }
     }
 
+    public void standardSelect(By dropdownLocator, String visibleText) {
+        retryAction(dropdownLocator, element -> {
+            Select select = new Select(element);
+            select.selectByVisibleText(visibleText);
+            logger.info("Selected '{}' from dropdown located by {}", visibleText, dropdownLocator);
+        }, ActionType.CLICK);
+    }
+
+    private List<WebElement> findElements(By locator) {
+        return driver.findElements(locator);
+    }
+
+    private WebElement getRandomElement(List<WebElement> elements) {
+        return elements.get(new Random().nextInt(elements.size()));
+    }
+
+    public void clickRandomWebElement(By locator) {
+        Exception lastException = null;
+
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
+                wait.until(ExpectedConditions.visibilityOfAllElementsLocatedBy(locator));
+
+                List<WebElement> elements = findElements(locator);
+                if (elements.isEmpty()) {
+                    logger.warn("No elements found for locator: {} on attempt {}/{}", locator, attempt, MAX_RETRIES);
+                    sleep(RETRY_DELAY_MS);
+                    continue;
+                }
+
+                WebElement randomElement = getRandomElement(elements);
+                logger.info("Clicking random element from locator: {} (attempt {}/{})", locator, attempt, MAX_RETRIES);
+
+                // Scroll into view
+                ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", randomElement);
+
+                // Wait for a element to be clickable
+                new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()))
+                        .until(ExpectedConditions.elementToBeClickable(randomElement));
+
+                // Try click, fallback to JS if intercepted
+                try {
+                    randomElement.click();
+                } catch (ElementClickInterceptedException ex) {
+                    logger.warn("Click intercepted, using JS click as fallback");
+                    ((JavascriptExecutor) driver).executeScript("arguments[0].click();", randomElement);
+                }
+
+                return; // success
+
+            } catch (StaleElementReferenceException | ElementNotInteractableException | TimeoutException e) {
+                lastException = e;
+                logger.warn("{} on random element for locator {}, attempt {}/{}", e.getClass().getSimpleName(), locator, attempt, MAX_RETRIES);
+                sleep(RETRY_DELAY_MS * attempt);
+            }
+        }
+
+        throw new RuntimeException("Failed to click random element from locator: " + locator +
+                " after " + MAX_RETRIES + " attempts", lastException);
+    }
+
+
+    public void selectADFDropdownOption(By dropdownLocator, String optionText) {
+        try {
+            // Step 1: Open dropdown via JS click
+            waitForElementToBeVisibleAndClickable(dropdownLocator);
+            clickByJS(dropdownLocator);
+
+            // Step 2: Define options locator (flexible match for ADF dropdowns)
+            By optionsLocator = By.xpath("//*[normalize-space(text())='" + optionText + "']");
+
+            // Step 3: Wait for option to be visible + clickable
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
+            WebElement optionElement = wait.until(ExpectedConditions.refreshed(
+                    ExpectedConditions.elementToBeClickable(optionsLocator)
+            ));
+
+            // Step 4: Scroll into view + click by JS
+            ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", optionElement);
+            clickByJS(optionsLocator);
+
+            // Step 5: Send TAB to confirm selection
+            retryAction(dropdownLocator, element -> {
+                element.sendKeys(Keys.TAB);
+                logger.info("Sent TAB to confirm selection for dropdown {}", dropdownLocator);
+            }, ActionType.INPUT);
+
+            logger.info("Selected option '{}' from ADF dropdown {}", optionText, dropdownLocator);
+
+        } catch (Exception e) {
+            String errorMsg = "Failed to select option '" + optionText + "' from ADF dropdown: " + e.getMessage();
+            logger.error(errorMsg, e);
+            throw new RuntimeException(errorMsg, e);
+        }
+    }
+
+    public void clickByJS(By locator) {
+        retryAction(locator, element -> {
+            ((JavascriptExecutor) driver).executeScript("arguments[0].click();", element);
+            logger.info("Clicked (via JS) element located by {}", locator);
+        }, ActionType.JS_CLICK);
+    }
+
+
+    public void waitForTitleToMatchFilenamedd(By titleLocator, String filename) {
+
+        new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()))
+                .until(driver ->
+                        {String titleValue = getElementAttribute(titleLocator);
+                            return titleValue != null && titleValue.contains(filename);
+                        }
+                );
+    }
+
+    public void waitForTitleToMatchFilename(By titleLocator, String filename) {
+        try {
+            retryAction(titleLocator, element -> {
+                String titleValue = getElementAttribute(titleLocator); // defaults to "value"
+                logger.debug("Checking attribute 'value': '{}' for expected filename '{}'", titleValue, filename);
+
+                if (titleValue == null || !titleValue.contains(filename)) {
+                    throw new RuntimeException("Attribute value does not contain expected filename: " + filename);
+                }
+
+                logger.info("Title matched with expected filename '{}'", filename);
+            }, ActionType.READ);
+        } catch (ElementActionFailedException e) {
+            String errorMsg = String.format("Title did not match filename '%s' within %d seconds",
+                    filename, testData.getExplicitWait());
+            logger.error(errorMsg, e);
+            throw new RuntimeException(errorMsg, e);
+        }
+    }
+
+
+    public String getElementAttribute(By locator) {
+        return getElementAttribute(locator, VALUE);
+    }
+
+    public String getElementAttribute(By locator, String attribute) {
+        final String attr = (attribute == null || attribute.isBlank()) ? VALUE : attribute;
+
+        try {
+//            final String[] result = {""}; // to capture inside lambda
+            AtomicReference<String> result = new AtomicReference<>(EMPTY_STRING);
+            retryAction(locator, element -> {
+                String value = element.getAttribute(attr);
+                result.set(value != null ? value : EMPTY_STRING);
+                logger.info("Retrieved attribute '{}' = '{}' from element {}", attr, result.get(), locator);
+            }, ActionType.READ);
+
+            return result.get();
+        } catch (ElementActionFailedException e) {
+            logger.warn("Failed to retrieve attribute '{}' from element {}: {}", attr, locator, e.getMessage());
+            return EMPTY_STRING;
+        }
+    }
+
+    public void uploadFile(By fileInputLocator, String filePath) {
+        if (filePath == null || filePath.isBlank()) {
+            throw new IllegalArgumentException("File path must not be null or empty");
+        }
+
+        retryAction(fileInputLocator, element -> {
+            element.sendKeys(filePath);
+            logger.info("Uploaded file '{}' using input located by {}", filePath, fileInputLocator);
+        }, ActionType.INPUT);
+    }
+
+
+    public void waitForElementReplacement(By oldLocator, By newLocator) {
+        retryAction(newLocator, element -> {
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
+
+            // Step 1: Capture old the element if present
+            try {
+                WebElement oldElement = driver.findElement(oldLocator);
+                wait.until(ExpectedConditions.stalenessOf(oldElement));
+                logger.info("Old element {} became stale", oldLocator);
+            } catch (NoSuchElementException e) {
+                logger.debug("Old element {} not present, skipping staleness check", oldLocator);
+            }
+
+            // Step 2: Ensure the new element is visible
+            wait.until(ExpectedConditions.visibilityOf(element));
+            logger.info("New element {} is visible after replacement", newLocator);
+
+        }, ActionType.READ);
+    }
+
+    public void inputEnterKey(By locator) {
+        waitForElementToBeVisibleAndClickable(locator); // optional extra safety
+        retryAction(locator, element -> {
+            element.sendKeys(Keys.ENTER);
+            logger.info("Sent ENTER key to element located by {}", locator);
+        }, ActionType.INPUT);
+    }
+
+    public void waitForOverlayToDisappear(By overlayLocator) {
+
+        try{
+            WebDriverWait shortWait = new WebDriverWait(driver, Duration.ofSeconds(3));
+            shortWait.until(ExpectedConditions.presenceOfElementLocated(overlayLocator));
+            logger.debug("Overlay appeared, now waiting for it to disappear...");
+        } catch (TimeoutException e) {
+            logger.debug("Overlay not present, proceeding without wait");
+            return; // Overlay not present, no need to wait
+        }
+        try {
+            WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
+            wait.until(ExpectedConditions.invisibilityOfElementLocated(overlayLocator));
+            logger.info("Overlay located by {} has disappeared", overlayLocator);
+        } catch (TimeoutException e) {
+            String errorMsg = String.format("Overlay %s did not disappear within %d seconds",
+                    overlayLocator, testData.getExplicitWait());
+            logger.error(errorMsg, e);
+            throw new RuntimeException(errorMsg, e);
+        }
+    }
+
+    public void waitForSpanToBePopulated(By locator) {
+        try {
+            retryAction(locator, element -> {
+                WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
+                wait.until(d -> {
+                    String text = element.getText().trim();
+                    return !text.isEmpty();
+                });
+                logger.info("Span located by {} is now populated", locator);
+            }, ActionType.READ);
+        } catch (ElementActionFailedException e) {
+            String errorMsg = String.format("Span %s was not populated within %d seconds",
+                    locator, testData.getExplicitWait());
+            logger.error(errorMsg, e);
+            throw new RuntimeException(errorMsg, e);
+        }
+    }
 }

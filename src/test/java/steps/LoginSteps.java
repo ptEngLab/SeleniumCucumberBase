@@ -37,7 +37,6 @@ public class LoginSteps {
     @Given("the user navigates to the login page")
     public void user_navigates_to_login_page() {
         logStep("Navigating to login page");
-//        context.getPageManager().loginAsRole(context.getTestData().getAppRole());
     }
 
     @Then("the user should see the dashboard")

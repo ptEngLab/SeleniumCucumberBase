@@ -5,7 +5,6 @@ import com.aventstack.extentreports.ExtentTest;
 import com.aventstack.extentreports.Status;
 import com.aventstack.extentreports.reporter.ExtentSparkReporter;
 import com.aventstack.extentreports.reporter.configuration.Theme;
-import config.ConfigReader;
 import io.cucumber.java.Scenario;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.edge.EdgeDriver;
@@ -21,15 +20,12 @@ public class ReportUtils {
     private static ExtentReports extentReports;
     private static final ThreadLocal<ExtentTest> tlTest = new ThreadLocal<>();
 
-    private static final ConfigReader config = ConfigReader.getInstance();
-
-    public static void initExtentReports() {
+    public static void initExtentReports(TestData testData) {
         if (extentReports == null) {
-            String reportDir = config.getString("report_dir", "reports");
-            String teamName = config.getString("team_name", "DefaultTeam");
-            String browser = config.getString("browser", "edge");
+            String reportPath = System.getProperty("user.dir") + File.separator + testData.getReportConfigPath();
+            String teamName = testData.getTeamName();
+            String browser = testData.getBrowserName();
 
-            String reportPath = System.getProperty("user.dir") + File.separator + reportDir;
             File dir = new File(reportPath);
             if (!dir.exists() && !dir.mkdirs()) {
                 logger.error("Failed to create report directory: {}", dir.getAbsolutePath());
@@ -51,9 +47,9 @@ public class ReportUtils {
         }
     }
 
-    public static synchronized void createScenarioTest(String scenarioName) {
-        if (extentReports == null) initExtentReports();
-        ExtentTest test = extentReports.createTest(scenarioName);
+    public static synchronized void createScenarioTest(TestData testData) {
+        if (extentReports == null) initExtentReports(testData);
+        ExtentTest test = extentReports.createTest(testData.getScenarioName());
         tlTest.set(test);
     }
 

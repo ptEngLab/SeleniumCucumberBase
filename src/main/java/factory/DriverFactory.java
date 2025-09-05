@@ -40,18 +40,20 @@ public class DriverFactory {
     }
 
     private void initialSetup() {
-        String testDataFile = config.getString("testDataFile", "testData.xlsx");
-        testData.setTestDataFile(System.getProperty("user.dir") + File.separator + testDataFile);
-        testData.setTestDataSheet(config.getString("testDataSheetName", "Sheet1"));
-        testData.setCredentialsSheet(config.getString("credentialsSheetName", "Credentials"));
         testData.setAppUrl(config.getString("application_url", "http://localhost"));
         testData.setBrowserName(config.getString("browser", "edge").toLowerCase());
         testData.setHeadless(config.getBoolean("headless", false));
         testData.setTeamName(config.getString("team_name", "QA"));
+
+        String testDataFile = config.getString("testDataFile", "testData.xlsx");
+        testData.setTestDataFile(System.getProperty("user.dir") + File.separator + testDataFile);
+        testData.setTestDataSheet(config.getString("testDataSheetName", "Sheet1"));
+        testData.setCredentialsSheet(config.getString("credentialsSheetName", "Credentials"));
         testData.setPageLoadTimeout(config.getInt("page_load_timeout", 30));
         testData.setImplicitWait(config.getInt("implicit_wait", 10));
         testData.setExplicitWait(config.getInt("explicit_wait", 20));
 
+        testData.setReportConfigPath(config.getString("reportsDir", "reports"));
         logger.info("Application URL: {}", testData.getAppUrl());
         logger.info("Test Data File: {}", testData.getTestDataFile());
         logger.info("Test Data Sheet: {}", testData.getTestDataSheet());
