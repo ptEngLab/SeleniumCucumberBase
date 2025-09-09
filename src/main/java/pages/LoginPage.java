@@ -1,6 +1,7 @@
 package pages;
 
 import org.openqa.selenium.By;
+import org.openqa.selenium.Keys;
 import org.openqa.selenium.WebDriver;
 import org.openqa.selenium.support.PageFactory;
 import utils.CommonMethods;
@@ -49,4 +50,5 @@ public class LoginPage extends CommonMethods {
         waitForVisibilityOfElement(images);      // Wait for a key element
         return true;
     }
+
 }

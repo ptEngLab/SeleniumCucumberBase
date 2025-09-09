@@ -74,7 +74,7 @@ public class Hooks {
     public void afterStep(Scenario scenario) {
         TestContext context = TestContextManager.getContext();
         CommonMethods commonMethods = new CommonMethods(context.getDriver(), context.getTestData());
-        commonMethods.scrollThroughPageToTriggerLazyLoading();
+        commonMethods.triggerLazyLoadingScroll();
         try {
             attachScreenshot(scenario, context.getDriver());
         } catch (Exception e) {
