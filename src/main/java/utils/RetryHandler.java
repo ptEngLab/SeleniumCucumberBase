@@ -88,12 +88,47 @@ public class RetryHandler {
 
                 WebElement element = wait.until(ExpectedConditions.refreshed(condition));
                 action.perform(element);
+
+                // ✅ Validation for INPUT (ensure value matches)
+                if (actionType == ActionType.INPUT && options.getExpectedText() != null) {
+                    String attr = options.getAttributeName() != null ? options.getAttributeName() : "value";
+                    new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()))
+                            .until(ExpectedConditions.attributeToBe(locator, attr, options.getExpectedText()));
+                    logger.info("Attribute '{}' successfully matched value '{}' for element {}", attr, options.getExpectedText(), locator);
+                }
+
                 logger.info("{} action succeeded on attempt {} for element {}", actionType, attempt, locator);
                 return;
 
-            } catch (StaleElementReferenceException | TimeoutException | ElementNotInteractableException e) {
+            } catch (ElementNotInteractableException e) {
                 lastException = e;
+                logger.warn("ElementNotInteractableException on element {}, attempt {}/{}", locator, attempt, MAX_RETRIES);
 
+                // ✅ JS Fallback for INPUT
+                if (actionType == ActionType.INPUT && options.getExpectedText() != null) {
+                    try {
+                        WebElement element = driver.findElement(locator);
+                        ((JavascriptExecutor) driver).executeScript(
+                                "arguments[0].scrollIntoView(true);" +
+                                        "arguments[0].value = arguments[1];" +
+                                        "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
+                                element, options.getExpectedText()
+                        );
+                        logger.info("JS fallback succeeded for input '{}' into element {}", options.getExpectedText(), locator);
+                        return; // ✅ Exit since JS fallback succeeded
+                    } catch (Exception jsEx) {
+                        logger.error("JS fallback also failed for {}: {}", locator, jsEx.getMessage());
+                    }
+                }
+
+                if (attempt < MAX_RETRIES) {
+                    long sleepTime = RETRY_DELAY_MS * attempt;
+                    logger.info("Retrying after {} ms", sleepTime);
+                    sleep(sleepTime);
+                }
+
+            } catch (StaleElementReferenceException | TimeoutException e) {
+                lastException = e;
                 logger.warn("{} on element {}, attempt {}/{}", e.getClass().getSimpleName(), locator, attempt, MAX_RETRIES);
 
                 if (attempt < MAX_RETRIES) {
@@ -101,6 +136,7 @@ public class RetryHandler {
                     logger.info("Retrying after {} ms", sleepTime);
                     sleep(sleepTime);
                 }
+
             } catch (Exception e) {
                 throw new ElementActionFailedException(
                         "Unexpected error during " + actionType + " on element: " + locator, e);
@@ -145,9 +181,9 @@ public class RetryHandler {
 
         };
     }
-    
+
     private ExpectedCondition<WebElement> createInputCondition(By locator) {
-        return new ExpectedCondition<WebElement>() {
+        return new ExpectedCondition<>() {
             @Override
             public WebElement apply(WebDriver driver) {
                 WebElement element = ExpectedConditions.presenceOfElementLocated(locator).apply(driver);

@@ -8,6 +8,7 @@ import org.openqa.selenium.support.ui.WebDriverWait;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.File;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -70,6 +71,11 @@ public class CommonMethods {
     public void waitForElementToDisappear(By locator) {
         WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
         wait.until(ExpectedConditions.invisibilityOfElementLocated(locator));
+    }
+
+    public void waitForValue(By locator, String expectedValue) {
+        WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
+        wait.until(ExpectedConditions.attributeToBe(locator, "value", expectedValue));
     }
 
 
@@ -196,7 +202,8 @@ public class CommonMethods {
             waitForElementToBeVisibleAndClickable(dropdownLocator);
             clickByJS(dropdownLocator);
 
-            By optionsLocator = By.xpath("//td[normalize-space(text())='" + optionText + "']");
+            By optionsLocator = By.xpath(String.format("//td[normalize-space(text())='%s']", optionText));
+
             waitForElementToBeClickable(optionsLocator);
 
             retryHandler.retryAction(optionsLocator, element -> {
@@ -284,15 +291,28 @@ public class CommonMethods {
         }, ActionType.INPUT, RetryOptions.none());
     }
 
-    public void uploadFile(By fileInputLocator, String filePath) {
-        if (filePath == null || filePath.isBlank()) {
-            throw new IllegalArgumentException("File path must not be null or empty");
+    /**
+     * Uploads a file to a file input element in Oracle Fusion SCM UI.
+     * Uses RetryHandler for robust retries.
+     *
+     * @param fileInputLocator By locator of the <input type="file">
+     * @param filename         Name of the file in the project root
+     */
+    public void uploadFile(By fileInputLocator, String filename) {
+        File file = new File(System.getProperty("user.dir") + File.separator + filename);
+        if (!file.exists()) {
+            throw new RuntimeException("File not found: " + file.getAbsolutePath());
         }
+
+        // Send a file path using RetryHandler
         retryHandler.retryAction(fileInputLocator, element -> {
-            element.sendKeys(filePath);
-            logger.info("Uploaded file '{}' using input located by {}", filePath, fileInputLocator);
-        }, ActionType.INPUT, RetryOptions.none());
+            element.sendKeys(file.getAbsolutePath());
+            logger.info("Sent file path '{}' to file input {}", file.getAbsolutePath(), fileInputLocator);
+        }, RetryHandler.ActionType.INPUT, RetryHandler.RetryOptions.none());
+
+
     }
+
 
     public void waitForElementReplacement(By oldLocator, By newLocator) {
         retryHandler.retryAction(newLocator, element -> {
