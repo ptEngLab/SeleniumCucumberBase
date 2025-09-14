@@ -10,11 +10,13 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.time.Duration;
+import java.util.function.Function;
 
 import static utils.Constants.*;
 
 /**
  * Handles retries for Selenium element actions with configurable conditions.
+ * Enhanced with exponential backoff, jitter, post-validation hooks, and extended JS fallbacks.
  */
 public class RetryHandler {
 
@@ -50,37 +52,119 @@ public class RetryHandler {
     public static class RetryOptions {
         private final String expectedText;
         private final String attributeName;
+        private final Integer maxRetries;
+        private final Long retryDelayMs;
+        private final Boolean useExponentialBackoff;
+        private final Boolean useJitter;
+        private final Function<WebDriver, Boolean> postValidation;
 
-        private RetryOptions(String expectedText, String attributeName) {
+        private RetryOptions(String expectedText, String attributeName, Integer maxRetries,
+                             Long retryDelayMs, Boolean useExponentialBackoff, Boolean useJitter,
+                             Function<WebDriver, Boolean> postValidation) {
             this.expectedText = expectedText;
             this.attributeName = attributeName;
+            this.maxRetries = maxRetries;
+            this.retryDelayMs = retryDelayMs;
+            this.useExponentialBackoff = useExponentialBackoff;
+            this.useJitter = useJitter;
+            this.postValidation = postValidation;
         }
 
         public static RetryOptions none() {
-            return new RetryOptions(null, null);
+            return new RetryOptions(null, null, null, null, null, null, null);
         }
 
         public static RetryOptions expectedText(String expectedText) {
-            return new RetryOptions(expectedText, null);
+            return new RetryOptions(expectedText, null, null, null, null, null, null);
         }
 
         public static RetryOptions attribute(String attributeName) {
-            return new RetryOptions(null, attributeName);
+            return new RetryOptions(null, attributeName, null, null, null, null, null);
         }
 
         public static RetryOptions attributeMatch(String expectedText, String attributeName) {
-            return new RetryOptions(expectedText, attributeName);
+            return new RetryOptions(expectedText, attributeName, null, null, null, null, null);
         }
 
+        public static RetryOptionsBuilder builder() {
+            return new RetryOptionsBuilder();
+        }
+
+        // Builder pattern for advanced configuration
+        public static class RetryOptionsBuilder {
+            private String expectedText;
+            private String attributeName;
+            private Integer maxRetries;
+            private Long retryDelayMs;
+            private Boolean useExponentialBackoff = true;
+            private Boolean useJitter = true;
+            private Function<WebDriver, Boolean> postValidation;
+
+            public RetryOptionsBuilder expectedText(String expectedText) {
+                this.expectedText = expectedText;
+                return this;
+            }
+
+            public RetryOptionsBuilder attributeName(String attributeName) {
+                this.attributeName = attributeName;
+                return this;
+            }
+
+            public RetryOptionsBuilder maxRetries(Integer maxRetries) {
+                this.maxRetries = maxRetries;
+                return this;
+            }
+
+            public RetryOptionsBuilder retryDelayMs(Long retryDelayMs) {
+                this.retryDelayMs = retryDelayMs;
+                return this;
+            }
+
+            public RetryOptionsBuilder useExponentialBackoff(Boolean useExponentialBackoff) {
+                this.useExponentialBackoff = useExponentialBackoff;
+                return this;
+            }
+
+            public RetryOptionsBuilder useJitter(Boolean useJitter) {
+                this.useJitter = useJitter;
+                return this;
+            }
+
+            public RetryOptionsBuilder postValidation(Function<WebDriver, Boolean> postValidation) {
+                this.postValidation = postValidation;
+                return this;
+            }
+
+            public RetryOptions build() {
+                return new RetryOptions(expectedText, attributeName, maxRetries,
+                        retryDelayMs, useExponentialBackoff, useJitter, postValidation);
+            }
+        }
     }
 
-    /**
-     * Main retry loop for element actions.
-     */
+    // ---------------------------
+    // JS Snippets (centralized)
+    // ---------------------------
+    private static final String JS_SCROLL_INTO_VIEW =
+            "arguments[0].scrollIntoView({behavior:'auto', block:'center', inline:'center'});";
+
+    private static final String JS_CLICK =
+            "arguments[0].click();";
+
+    private static final String JS_INPUT =
+            "arguments[0].value = arguments[1];" +
+                    "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));" +
+                    "arguments[0].dispatchEvent(new Event('change', { bubbles: true }));";
+
+    // ---------------------------
+    // Retry loop
+    // ---------------------------
     public void retryAction(By locator, ElementAction action, ActionType actionType, RetryOptions options) {
         Exception lastException = null;
+        int maxRetries = getEffectiveMaxRetries(options);
+        long baseDelayMs = getEffectiveRetryDelay(options);
 
-        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        for (int attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 WebDriverWait wait = new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()));
                 ExpectedCondition<WebElement> condition =
@@ -89,12 +173,16 @@ public class RetryHandler {
                 WebElement element = wait.until(ExpectedConditions.refreshed(condition));
                 action.perform(element);
 
-                // ✅ Validation for INPUT (ensure value matches)
+                // Validation for INPUT
                 if (actionType == ActionType.INPUT && options.getExpectedText() != null) {
-                    String attr = options.getAttributeName() != null ? options.getAttributeName() : "value";
-                    new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()))
-                            .until(ExpectedConditions.attributeToBe(locator, attr, options.getExpectedText()));
-                    logger.info("Attribute '{}' successfully matched value '{}' for element {}", attr, options.getExpectedText(), locator);
+                    validateInputAction(locator, options);
+                }
+
+                // Post-validation hook
+                if (options.getPostValidation() != null) {
+                    if (!options.getPostValidation().apply(driver)) {
+                        throw new TimeoutException("Post-validation failed for " + locator);
+                    }
                 }
 
                 logger.info("{} action succeeded on attempt {} for element {}", actionType, attempt, locator);
@@ -102,40 +190,25 @@ public class RetryHandler {
 
             } catch (ElementNotInteractableException e) {
                 lastException = e;
-                logger.warn("ElementNotInteractableException on element {}, attempt {}/{}", locator, attempt, MAX_RETRIES);
+                logger.warn("ElementNotInteractableException on element {}, attempt {}/{}", locator, attempt, maxRetries);
 
-                // ✅ JS Fallback for INPUT
-                if (actionType == ActionType.INPUT && options.getExpectedText() != null) {
-                    try {
-                        WebElement element = driver.findElement(locator);
-                        ((JavascriptExecutor) driver).executeScript(
-                                "arguments[0].scrollIntoView(true);" +
-                                        "arguments[0].value = arguments[1];" +
-                                        "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
-                                element, options.getExpectedText()
-                        );
-                        logger.info("JS fallback succeeded for input '{}' into element {}", options.getExpectedText(), locator);
-                        return; // ✅ Exit since JS fallback succeeded
-                    } catch (Exception jsEx) {
-                        logger.error("JS fallback also failed for {}: {}", locator, jsEx.getMessage());
-                    }
+                // JS Fallback
+                if (attemptJsFallback(locator, actionType, options.getExpectedText())) {
+                    driver.findElement(locator);
+                    return;
                 }
 
-                if (attempt < MAX_RETRIES) {
-                    long sleepTime = RETRY_DELAY_MS * attempt;
-                    logger.info("Retrying after {} ms", sleepTime);
-                    sleep(sleepTime);
-                }
+                handleRetryDelay(attempt, baseDelayMs, options, locator.toString());
 
-            } catch (StaleElementReferenceException | TimeoutException e) {
+            } catch (StaleElementReferenceException e) {
                 lastException = e;
-                logger.warn("{} on element {}, attempt {}/{}", e.getClass().getSimpleName(), locator, attempt, MAX_RETRIES);
+                logger.warn("StaleElementReferenceException on element {}, attempt {}/{}", locator, attempt, maxRetries);
+                sleep(100); // quick retry, no full backoff
 
-                if (attempt < MAX_RETRIES) {
-                    long sleepTime = RETRY_DELAY_MS * attempt;
-                    logger.info("Retrying after {} ms", sleepTime);
-                    sleep(sleepTime);
-                }
+            } catch (TimeoutException e) {
+                lastException = e;
+                logger.warn("TimeoutException on element {}, attempt {}/{}", locator, attempt, maxRetries);
+                handleRetryDelay(attempt, baseDelayMs, options, locator.toString());
 
             } catch (Exception e) {
                 throw new ElementActionFailedException(
@@ -145,7 +218,76 @@ public class RetryHandler {
 
         throw new ElementActionFailedException(
                 "Failed to perform " + actionType + " on element: " + locator +
-                        " after " + MAX_RETRIES + " attempts", lastException);
+                        " after " + maxRetries + " attempts", lastException);
+    }
+
+    // ---------------------------
+    // Helper methods
+    // ---------------------------
+    private int getEffectiveMaxRetries(RetryOptions options) {
+        return options != null && options.getMaxRetries() != null ? options.getMaxRetries() : MAX_RETRIES;
+    }
+
+    private long getEffectiveRetryDelay(RetryOptions options) {
+        return options != null && options.getRetryDelayMs() != null ? options.getRetryDelayMs() : RETRY_DELAY_MS;
+    }
+
+    private void handleRetryDelay(int attempt, long baseDelayMs, RetryOptions options, String elementInfo) {
+        int maxRetries = getEffectiveMaxRetries(options);
+        if (attempt < maxRetries) {
+            long sleepTime = calculateSleepTime(attempt, baseDelayMs, options);
+            logger.debug("Retrying {} after {} ms", elementInfo, sleepTime);
+            sleep(sleepTime);
+        }
+    }
+
+    private long calculateSleepTime(int attempt, long baseDelayMs, RetryOptions options) {
+        boolean useExponentialBackoff = options == null || options.getUseExponentialBackoff() == null ||
+                options.getUseExponentialBackoff();
+        boolean useJitter = options == null || options.getUseJitter() == null || options.getUseJitter();
+
+        long delay = useExponentialBackoff ? baseDelayMs * (long) Math.pow(2, attempt - 1) : baseDelayMs;
+
+        if (useJitter) {
+            long jitter = (long) (Math.random() * delay * 0.2);
+            delay += jitter;
+        }
+        return delay;
+    }
+
+    private void validateInputAction(By locator, RetryOptions options) {
+        String attr = options.getAttributeName() != null ? options.getAttributeName() : "value";
+        new WebDriverWait(driver, Duration.ofSeconds(testData.getExplicitWait()))
+                .until(ExpectedConditions.attributeToBe(locator, attr, options.getExpectedText()));
+        logger.info("Attribute '{}' matched expected value '{}' for element {}",
+                attr, options.getExpectedText(), locator);
+    }
+
+    private boolean attemptJsFallback(By locator, ActionType actionType, String text) {
+        try {
+            WebElement element = driver.findElement(locator);
+            ((JavascriptExecutor) driver).executeScript(JS_SCROLL_INTO_VIEW, element);
+
+            switch (actionType) {
+                case CLICK, JS_CLICK -> ((JavascriptExecutor) driver).executeScript(JS_CLICK, element);
+                case INPUT -> {
+                    if (text != null) {
+                        ((JavascriptExecutor) driver).executeScript(JS_INPUT, element, text);
+                    }
+                }
+                default -> {
+                    logger.warn("No JS fallback implemented for {}", actionType);
+                    return false;
+                }
+            }
+
+            logger.info("JS fallback succeeded for {} on element {}", actionType, locator);
+            return true;
+
+        } catch (Exception jsEx) {
+            logger.error("JS fallback failed for {}: {}", locator, jsEx.getMessage());
+            return false;
+        }
     }
 
     private ExpectedCondition<WebElement> getConditionForAction(ActionType actionType, By locator,
@@ -160,25 +302,20 @@ public class RetryHandler {
             case READ -> ExpectedConditions.presenceOfElementLocated(locator);
             case TEXT_MATCH -> driver -> {
                 WebElement element = driver.findElement(locator);
-                String actualText = element.getText();
-                return matchesExpectedText(actualText, expectedText) ? element : null;
+                return matchesExpectedText(element.getText(), expectedText) ? element : null;
             };
             case ATTRIBUTE_MATCH -> driver -> {
                 WebElement element = driver.findElement(locator);
-                String attrValue = element.getAttribute(attributeName);
-                return matchesExpectedText(attrValue, expectedText) ? element : null;
+                return matchesExpectedText(element.getAttribute(attributeName), expectedText) ? element : null;
             };
             case ATTRIBUTE_NON_EMPTY -> driver -> {
                 WebElement element = driver.findElement(locator);
-                String attrValue = element.getAttribute(attributeName);
-                return (StringUtils.isNotBlank(attrValue)) ? element : null;
+                return StringUtils.isNotBlank(element.getAttribute(attributeName)) ? element : null;
             };
             case TEXT_NON_EMPTY -> driver -> {
                 WebElement element = driver.findElement(locator);
-                String text = element.getText();
-                return !text.trim().isEmpty() ? element : null;
+                return StringUtils.isNotBlank(element.getText()) ? element : null;
             };
-
         };
     }
 
@@ -187,41 +324,23 @@ public class RetryHandler {
             @Override
             public WebElement apply(WebDriver driver) {
                 WebElement element = ExpectedConditions.presenceOfElementLocated(locator).apply(driver);
-                if (element == null) {
-                    logger.info("Element not present yet: {}", locator);
-                    return null;
-                }
+                if (element == null) return null;
+
                 try {
-                    String display = element.getCssValue("display");
-                    String visibility = element.getCssValue("visibility");
-                    String opacity = element.getCssValue("opacity");
-                    logger.info("Element CSS - display: {}, visibility: {}, opacity: {}", display, visibility, opacity);
-                    ((JavascriptExecutor) driver).executeScript("arguments[0].scrollIntoView(true);", element);
-
-                    Boolean visible = (Boolean) ((JavascriptExecutor) driver)
-                            .executeScript(
-                                    "var elem = arguments[0]; " +
-                                            "var rect = elem.getBoundingClientRect(); " +
-                                            "return (rect.width > 0 && rect.height > 0) && " +
-                                            "window.getComputedStyle(elem).visibility === 'visible' && " +
-                                            "window.getComputedStyle(elem).display !== 'none';",
-                                    element);
-
-                    if (Boolean.FALSE.equals(visible)) {
-                        logger.info("Element is present but not visible yet according to JS: {}", locator);
-                        return null;
-                    }
+                    ((JavascriptExecutor) driver).executeScript(JS_SCROLL_INTO_VIEW, element);
+                    Boolean visible = (Boolean) ((JavascriptExecutor) driver).executeScript(
+                            "var elem = arguments[0]; " +
+                                    "var rect = elem.getBoundingClientRect(); " +
+                                    "return (rect.width > 0 && rect.height > 0) && " +
+                                    "window.getComputedStyle(elem).visibility === 'visible' && " +
+                                    "window.getComputedStyle(elem).display !== 'none';",
+                            element);
+                    if (Boolean.FALSE.equals(visible)) return null;
                 } catch (Exception e) {
-                    logger.warn("JS visibility check failed for element {}: {}", locator, e.getMessage());
+                    logger.debug("JS visibility check failed for {}: {}", locator, e.getMessage());
                 }
-                if (!element.isDisplayed()) {
-                    logger.info("Element is present but not displayed yet: {}", locator);
-                    return null;
-                }
-                if (!element.isEnabled()) {
-                    logger.info("Element is visible but not enabled yet: {}", locator);
-                    return null;
-                }
+
+                if (!element.isDisplayed() || !element.isEnabled()) return null;
                 return element;
             }
 
@@ -234,9 +353,18 @@ public class RetryHandler {
 
     private boolean matchesExpectedText(String actualText, String expectedText) {
         if (StringUtils.isBlank(expectedText)) return StringUtils.isNotBlank(actualText);
+
         if (expectedText.startsWith("regex:")) {
-            String pattern = expectedText.substring(6).trim();
-            return StringUtils.isNotBlank(actualText) && actualText.trim().matches(pattern);
+            return StringUtils.isNotBlank(actualText) &&
+                    actualText.trim().matches(expectedText.substring(6).trim());
+        }
+        if (expectedText.startsWith("equals:")) {
+            return StringUtils.isNotBlank(actualText) &&
+                    actualText.trim().equals(expectedText.substring(7).trim());
+        }
+        if (expectedText.startsWith("icontains:")) {
+            return StringUtils.isNotBlank(actualText) &&
+                    actualText.toLowerCase().contains(expectedText.substring(10).trim().toLowerCase());
         }
         return StringUtils.isNotBlank(actualText) && actualText.contains(expectedText);
     }
